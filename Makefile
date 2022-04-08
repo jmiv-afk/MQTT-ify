@@ -10,7 +10,7 @@ ifeq ($(CFLAGS),)
 endif 
 
 ifeq ($(LDFLAGS),)
-	LDFLAGS = 
+	LDFLAGS = -lmosquitto 
 endif 
 
 TARGET = mqttify 
