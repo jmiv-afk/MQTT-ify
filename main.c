@@ -1,20 +1,48 @@
 /* =============================================================================
  * @file main.c
- * @brief This is a mqtt client application which recieves uart packets 
- *
+ * @brief MQTT client application which transmits and receives uart packets
+ * +------------------------------------------------------------
  * @author Jake Michael, jami1063@colorado.edu
+ * @usage: mqttify [-f serial_port] [-d]
+ *    -f, --file : a serial port device to read/write data to (required)
+ *    -d, --daemon :  run this process as a daemon
+ *  example:
+ *    mqttify --file /dev/ttyAMA0 --daemon
+ *
  * @resources 
- * (+) example client:
  *    https://github.com/Johannes4Linux/libmosquitto_examples
+ *    https://github.com/eclipse/mosquitto/tree/master/examples
+ * + ------------------------------------------------------------
  * ===========================================================================*/
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <time.h>
 #include <mosquitto.h>
 #include "log.h"
 #include "serial.h"
+
+#define BROKER    "ec36fe04c68947d399f3cbbc782e89ff.s2.eu.hivemq.cloud"
+#define PORT      (8883)
+#define KEEPALIVE (10)
+
+//#define BROKER    "localhost"
+//#define PORT      (8883)
+//#define KEEPALIVE (10)
+
+/*
+ * The target expects password file located at /etc/mqttify/passwd.txt, vs. the
+ * test/development environment has it in folder it is running from ./passwd.txt
+ */
+#ifdef TARGET_BUILD
+  #pragma message ("TARGET_BUILD set")
+  #define PASSWORD_FILE "/etc/mqttify/passwd.txt"
+#else
+  #define PASSWORD_FILE "passwd.txt"
+#endif
 
 /* =============================================================================
  *    FUNCTION HEADERS
@@ -52,7 +80,7 @@ void print_usage();
  *         mosquitto_message* msg, the message data, cleared after callback completes
  * @return None
  */
-void message_cb(struct mosquitto *mosq, void* obj, const struct mosquitto_message *msg);
+void on_message(struct mosquitto *mosq, void* obj, const struct mosquitto_message *msg);
 
 
 /*
@@ -62,13 +90,23 @@ void message_cb(struct mosquitto *mosq, void* obj, const struct mosquitto_messag
  *         rc, the result code of connection
  * @return None 
  */
-void connect_cb(struct mosquitto *mosq, void* obj, int rc);
+void on_connect(struct mosquitto *mosq, void* obj, int rc);
+
+/* 
+ * @brief  Cleans up program and exits
+ * @param  None
+ * @return None
+ */
+static void cleanup_and_exit();
+
+
 
 /* =============================================================================
  *    GLOBALS
  * ===========================================================================*/
 static struct mosquitto *mosq = NULL; 
 static bool global_abort = false;
+static bool connection_status = false;
 
 
 /* =============================================================================
@@ -77,9 +115,9 @@ static bool global_abort = false;
 
 int main(int argc, char** argv) 
 {
-  bool connection_status = false;
   bool daemonize_flag = false;
   char* serial_device = NULL;
+  int maxlen = 16;
   int rc = -1;
 
   // extract information from arguments
@@ -87,7 +125,8 @@ int main(int argc, char** argv)
   {
     for (int i=1; i<argc; i++)
     {
-      if ( !strcmp(argv[i], "-d") || !strcmp(argv[i],"--daemonize") )
+      if (strlen(argv[i]) > maxlen) continue;
+      if ( !strcmp(argv[i], "-d") || !strcmp(argv[i],"--daemon") )
       {
         daemonize_flag = true;
       }
@@ -98,16 +137,13 @@ int main(int argc, char** argv)
     }
   }
   
-  printf("serial_device = %s\n", serial_device);
+  printf("starting mqttify with serial_device = %s\n", serial_device);
 
   if (serial_device == NULL)
   {
     print_usage();
     return -1;
   }
-
-  if (daemonize_flag) 
-    daemonize_proc();
 
   // initialize the serial device
   if (0 != serial_init(serial_device)) 
@@ -126,9 +162,9 @@ int main(int argc, char** argv)
   mosquitto_lib_init();
 
   // create the mosquitto client, with device_id "mqttify"
-  mosq = mosquitto_new( "mqttify", 
-                           true, 
-                           NULL
+  mosq = mosquitto_new( NULL, 
+                        true, 
+                        NULL
                         );
   if (mosq == NULL)
   {
@@ -149,24 +185,117 @@ int main(int argc, char** argv)
     LOG(LOG_ERR, "mosquitto_will_set rc=%d, %s", rc, mosquitto_strerror(rc));
   }
 
-  mosquitto_connect_callback_set(mosq, connect_cb);
-  mosquitto_message_callback_set(mosq, message_cb);
+  mosquitto_connect_callback_set(mosq, on_connect);
+  mosquitto_message_callback_set(mosq, on_message);
+
+  FILE* password_file = NULL;
+  password_file = fopen(PASSWORD_FILE, "r");
+  if (!password_file)
+  {
+    LOG(LOG_ERR, "open(), password file not found at %s, %s", PASSWORD_FILE, 
+         strerror(errno));
+    goto cleanup;
+  }
+
+  size_t user_pass_len = 32; 
+  char* username = NULL;
+  char* password = NULL;
+  bool in_username = true;
+  char c;
+  username = malloc(user_pass_len*sizeof(char));
+  if (!username) 
+  {
+    LOG(LOG_ERR, "could not malloc username");
+    goto cleanup;
+  }
+  password = malloc(user_pass_len*sizeof(char));
+  if (!password) 
+  {
+    LOG(LOG_ERR, "could not malloc password");
+    goto cleanup;
+  }
+
+
+  char *buf = username; // initially populate username 
+  int i = 0;
+  while(i < user_pass_len )
+  {
+    c = fgetc(password_file);
+    *(buf++) = c; 
+    i++;
+
+    if (c == '\n' || c == '\0' || c == '\r')
+    {
+      *(buf-1) = '\0'; // terminate string
+      if (in_username) 
+      {
+        buf = password;
+        i = 0;
+        in_username = false;
+      }
+      else 
+      {
+        break;
+      }
+
+    }
+  }
+  buf = NULL; // get rid of buf pointer
+
+
+//  rc = mosquitto_tls_set( mosq,
+//                          "/home/jmiv/aesd/MQTT-ify/cert.pem",
+//                          NULL,
+//                          "/home/jmiv/aesd/MQTT-ify/cert.pem",
+//                          NULL,
+//                          NULL
+//                        );
+  if (rc != MOSQ_ERR_SUCCESS) 
+  {
+    LOG(LOG_ERR, "mosquitto_tls_set rc=%d, %s", rc, mosquitto_strerror(rc));
+  }
+
+  // set username and password for authentication
+  rc = mosquitto_username_pw_set( mosq,
+                                  username, 
+                                  password
+                                );
+  if (rc != MOSQ_ERR_SUCCESS) 
+  {
+    LOG(LOG_ERR, "mosquitto_username_pw_set rc=%d, %s", rc, mosquitto_strerror(rc));
+  }
+  memset(username, 0, user_pass_len); // write over memory
+  free(username); username = NULL;
+  memset(password, 0, user_pass_len); // write over memory
+  free(password); password = NULL;
 
   // connect to broker
   rc = mosquitto_connect( mosq, 
-                          "localhost", 
-                          1883, 
-                          60
+                          BROKER, 
+                          PORT, 
+                          KEEPALIVE
                         );
-  if (rc != 0)
+  if (rc != MOSQ_ERR_SUCCESS)
   {
     LOG(LOG_ERR, "mosquitto_connect rc=%d, %s", rc, mosquitto_strerror(rc));
-    mosquitto_destroy(mosq);
-    return -1;
+    goto cleanup;
   }
 
-  LOG(LOG_INFO, "client is connected to broker");
-  connection_status = 1;
+  // run the main (threaded) network loop for the client 
+  //rc = mosquitto_loop_start(mosq);
+  //if (rc != MOSQ_ERR_SUCCESS)
+  //{
+  //  LOG(LOG_ERR, "mosquitto_loop rc=%d, %s", rc, mosquitto_strerror(rc));
+  //  goto cleanup;
+  //}
+
+  LOG(LOG_INFO, "waiting for connection...");
+  const struct timespec sleep_time = {1, 0};
+  while(!connection_status && !global_abort) 
+  {
+    nanosleep(&sleep_time, NULL);  // sleep for 1 second at a time
+  };
+
   rc = mosquitto_publish( mosq, 
                           NULL, 
                           "mqttify/client-connection-status", 
@@ -175,22 +304,39 @@ int main(int argc, char** argv)
                           0, 
                           false
                         );
-  if (rc != 0)
+  if (rc != MOSQ_ERR_SUCCESS)
   {
-    LOG(LOG_ERR, "mosquitto_publish rc=%d, %s", rc, mosquitto_strerror(rc));
-    mosquitto_destroy(mosq);
-    return -1;
+    LOG(LOG_ERR, "mosquitto_publish connection status rc=%d, %s", 
+        rc, mosquitto_strerror(rc));
+    goto cleanup;
   }
 
-  int max_msglen = 256;
-  char rx_msg[max_msglen];
-  int bytes_read = 0;
+  if (daemonize_flag) 
+  {
+    rc = daemonize_proc();
+
+    if (rc != 0)
+    {
+      LOG(LOG_ERR, "daemonize_proc rc=%d, %s", rc, mosquitto_strerror(rc));
+      goto cleanup;
+    }
+  }
+
+  int bytes_read;
+  int rx_msg_len = 256;
+  char* rx_msg = malloc(rx_msg_len*sizeof(char));
+  if (!rx_msg)
+  {
+    LOG(LOG_ERR, "malloc rx_msg fail, %d", errno);
+    goto cleanup;
+  }
+
 
   while(!global_abort) 
   {
-    memset(&rx_msg[0], 0, 256);
+    memset(&rx_msg[0], 0, strlen(rx_msg));
     
-    bytes_read = serial_read(rx_msg, max_msglen);
+    bytes_read = serial_read(rx_msg, rx_msg_len);
     if (bytes_read < 0)
     {
       LOG(LOG_ERR, "serial_read rc=%d", bytes_read);
@@ -203,45 +349,62 @@ int main(int argc, char** argv)
                               NULL, 
                               "mqttify/device-rx", 
                               strlen(rx_msg), 
-                              (void*) &rx_msg, 
+                              (void*) &rx_msg[0], 
                               0, 
                               false
                             );
+      if (rc != MOSQ_ERR_SUCCESS)
+      {
+        LOG(LOG_ERR, "mosquitto_publish device-rx rc=%d, %s", \
+            rc, mosquitto_strerror(rc));
+        global_abort = true;
+      }
     }
 
-    // run the main network loop for the client 
-    mosquitto_loop();
+    rc = mosquitto_loop(mosq, 100, 10);
+    if (rc != MOSQ_ERR_SUCCESS)
+    {
+      LOG(LOG_ERR, "mosquitto_loop rc=%d, %s", rc, mosquitto_strerror(rc));
+      global_abort = true;
+    }
 
   } // while(!global_abort)
   
+cleanup:
+  cleanup_and_exit();
+  free(rx_msg);
+  mosquitto_disconnect(mosq);
+  mosquitto_loop_stop(mosq, true);
+
+  return rc;
+}
+
+void cleanup_and_exit()
+{
   mosquitto_disconnect(mosq);
   mosquitto_destroy(mosq);
   mosquitto_lib_cleanup();
-
-  // publish message
-  return 0;
 }
 
 void print_usage()
 {
-  printf("Usage: mqttify [-required] [-options]\n");
-  printf("Required:\n");
-  printf("  -f, --file       a device file to read/write data to\n");
-  printf("Options: \n");
-  printf("  -d, --daemonize  run this process as a daemon\n");
-  printf("Example:\n");
+  printf("Usage: mqttify [-f serial_port] [-d | --daemon]\n");
+  printf("required:\n");
+  printf("  -f, --file : a uart serial device to read/write data to\n");
+  printf("options: \n");
+  printf("  -d, --daemon : run this process as a daemon\n");
+  printf("example:\n");
   printf("  mqttify --file /dev/<example> -d\n");
 }
 
-void connect_cb(struct mosquitto *mosq, void* obj, int rc)
+void on_connect(struct mosquitto *mosq, void* obj, int rc)
 {
   int ret;
-
-  LOG(LOG_INFO, "connect_cb: %s", mosquitto_connack_string(rc));
-
+  
+  LOG(LOG_INFO, "on_connect, CONNACK: %d, %s", rc, mosquitto_connack_string(rc));
   if (rc != 0)
   {
-    LOG(LOG_ERR, "connect_cb rc=%d", rc);
+    LOG(LOG_ERR, "on_connect rc=%d", rc);
     global_abort = true;
   }
 
@@ -251,15 +414,16 @@ void connect_cb(struct mosquitto *mosq, void* obj, int rc)
     LOG(LOG_ERR, "mosquitto_subscribe rc=%d, %s", rc, mosquitto_strerror(rc));
     global_abort = true;
   }
+  connection_status = true;
 
-} // connect_cb
+} // on_connect
 
 
-void message_cb(struct mosquitto *mosq, void* obj, const struct mosquitto_message *msg)
+void on_message(struct mosquitto *mosq, void* obj, const struct mosquitto_message *msg)
 {
   // write the message payload to tx
   serial_write((char*) msg->payload, msg->payloadlen);
-} // message_cb
+} // on_message
 
 static int register_signal_handlers() 
 {

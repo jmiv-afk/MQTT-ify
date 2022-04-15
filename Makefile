@@ -13,12 +13,17 @@ ifeq ($(LDFLAGS),)
 	LDFLAGS = -lmosquitto 
 endif 
 
+TARGET_BUILD?=0
+ifeq ($(TARGET_BUILD),1)
+	CUSTOMFLAGS = -DTARGET_BUILD
+endif
+
 TARGET = mqttify 
 all: $(TARGET)
 default: $(TARGET)
 
 $(TARGET): $(SRCS) 
-	$(CC) $(CFLAGS) $^ -o $@ $(INCLUDES) $(LDFLAGS)
+	$(CC) $(CFLAGS) $^ -o $@ $(INCLUDES) $(LDFLAGS) $(CUSTOMFLAGS)
 
 .PHONY: clean
 clean:
