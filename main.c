@@ -10,8 +10,6 @@
  *    mqttify --file /dev/ttyAMA0 --daemon
  *
  * @resources 
- *    https://github.com/Johannes4Linux/libmosquitto_examples
- *    https://github.com/eclipse/mosquitto/tree/master/examples
  * + ------------------------------------------------------------
  * ===========================================================================*/
 
@@ -21,16 +19,20 @@
 #include <string.h>
 #include <signal.h>
 #include <time.h>
-#include <mosquitto.h>
+#include "MQTTClient.h"
 #include "log.h"
 #include "serial.h"
 
-#define BROKER    "ec36fe04c68947d399f3cbbc782e89ff.s2.eu.hivemq.cloud"
-#define PORT      (8883)
+#define BROKER  ("ssl://ec36fe04c68947d399f3cbbc782e89ff.s2.eu.hivemq.cloud:8883")
 #define KEEPALIVE (10)
 
-//#define BROKER    "localhost"
-//#define PORT      (8883)
+// QOS for client 
+// QOS 0, fire and forget - message may not be delivered
+// QOS 1, message is delivered but may be delivered more than once
+// QOS 2, message is delivered but may be delivered more than once
+#define QOS       (1) 
+
+//#define BROKER    "tcp://localhost:8883"
 //#define KEEPALIVE (10)
 
 /*
@@ -73,25 +75,6 @@ static int daemonize_proc();
  */
 void print_usage();
 
-/*
- * @brief  Message callback function
- * @param  Struct mosquitto *mosq, the mosquitto instance
- *         void* obj, the user data provided in mosquitto_new
- *         mosquitto_message* msg, the message data, cleared after callback completes
- * @return None
- */
-void on_message(struct mosquitto *mosq, void* obj, const struct mosquitto_message *msg);
-
-
-/*
- * @brief  Connect callback function
- * @param  struct mosquitto *mosq, the mosquitto instance
- *         void* obj, the user data provided in mosquitto_new
- *         rc, the result code of connection
- * @return None 
- */
-void on_connect(struct mosquitto *mosq, void* obj, int rc);
-
 /* 
  * @brief  Cleans up program and exits
  * @param  None
@@ -99,14 +82,16 @@ void on_connect(struct mosquitto *mosq, void* obj, int rc);
  */
 static void cleanup_and_exit();
 
+void disconnect_cb(void *context, char* cause);
 
+int message_cb(void *context, char* topicName, int topicLen, MQTTClient_message *message);
 
 /* =============================================================================
  *    GLOBALS
  * ===========================================================================*/
-static struct mosquitto *mosq = NULL; 
+MQTTClient client;
 static bool global_abort = false;
-static bool connection_status = false;
+static bool try_reconnect = false;
 
 
 /* =============================================================================
@@ -132,7 +117,7 @@ int main(int argc, char** argv)
       }
       else if ( (!strcmp(argv[i],"-f") || !strcmp(argv[i],"--file")) && i+1 < argc )
       {
-         serial_device = argv[i+1];
+        serial_device = argv[i+1];
       }
     }
   }
@@ -158,35 +143,36 @@ int main(int argc, char** argv)
     LOG(LOG_ERR, "register_signal_handlers fail");
   }
   
-  // initialize the mosquitto library
-  mosquitto_lib_init();
-
-  // create the mosquitto client, with device_id "mqttify"
-  mosq = mosquitto_new( NULL, 
-                        true, 
-                        NULL
-                        );
-  if (mosq == NULL)
+  // configure and create the MQTT Client
+  MQTTClient client;
+  rc = MQTTClient_create(&client, BROKER, "mqttifyremote", 
+                         MQTTCLIENT_PERSISTENCE_NONE, NULL);
+  if ( MQTTCLIENT_SUCCESS != rc)
   {
-    LOG(LOG_ERR, "mosquitto_new fail, error=%s", strerror(errno));
-    return -1;
+    LOG(LOG_ERR, "MQTTClient_create() returned %d", rc);
+    goto cleanup;
   }
 
-  // setup a will message in case of client disconnect
-  rc = mosquitto_will_set( mosq,  
-                           "mqttify/client-connection-status",
-                           sizeof(connection_status),
-                           &connection_status,
-                           0,
-                           false
-                         );
-  if (rc != 0)
+  MQTTClient_setCallbacks(client, NULL, disconnect_cb, message_cb, NULL);
+  if ( MQTTCLIENT_SUCCESS != rc)
   {
-    LOG(LOG_ERR, "mosquitto_will_set rc=%d, %s", rc, mosquitto_strerror(rc));
+    LOG(LOG_ERR, "MQTTClient_setCallbacks() returned %d", rc);
+    goto cleanup;
   }
 
-  mosquitto_connect_callback_set(mosq, on_connect);
-  mosquitto_message_callback_set(mosq, on_message);
+  MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
+  MQTTClient_SSLOptions ssl_opts = MQTTClient_SSLOptions_initializer;
+  ssl_opts.enableServerCertAuth = 0;
+  ssl_opts.verify = 1;
+  ssl_opts.CApath = NULL;
+  ssl_opts.keyStore = NULL;
+  ssl_opts.trustStore = NULL;
+  ssl_opts.privateKey = NULL;
+  ssl_opts.privateKeyPassword = NULL;
+  ssl_opts.enabledCipherSuites = NULL;
+  conn_opts.ssl = &ssl_opts;
+  conn_opts.keepAliveInterval = 20;
+  conn_opts.cleansession = 1;
 
   FILE* password_file = NULL;
   password_file = fopen(PASSWORD_FILE, "r");
@@ -196,7 +182,6 @@ int main(int argc, char** argv)
          strerror(errno));
     goto cleanup;
   }
-
   size_t user_pass_len = 32; 
   char* username = NULL;
   char* password = NULL;
@@ -242,87 +227,37 @@ int main(int argc, char** argv)
   }
   buf = NULL; // get rid of buf pointer
 
+  // set username/password
+  conn_opts.username = username;
+  conn_opts.password = password;
 
-//  rc = mosquitto_tls_set( mosq,
-//                          "/home/jmiv/aesd/MQTT-ify/cert.pem",
-//                          NULL,
-//                          "/home/jmiv/aesd/MQTT-ify/cert.pem",
-//                          NULL,
-//                          NULL
-//                        );
-  if (rc != MOSQ_ERR_SUCCESS) 
+  rc = MQTTClient_connect(client, &conn_opts);
+  if ( MQTTCLIENT_SUCCESS != rc)
   {
-    LOG(LOG_ERR, "mosquitto_tls_set rc=%d, %s", rc, mosquitto_strerror(rc));
+    LOG(LOG_ERR, "MQTTClient_connect() returned %d", rc);
+    goto cleanup;
   }
 
-  // set username and password for authentication
-  rc = mosquitto_username_pw_set( mosq,
-                                  username, 
-                                  password
-                                );
-  if (rc != MOSQ_ERR_SUCCESS) 
-  {
-    LOG(LOG_ERR, "mosquitto_username_pw_set rc=%d, %s", rc, mosquitto_strerror(rc));
-  }
+  try_reconnect = false;
+
+  // clear out username and password in memory
   memset(username, 0, user_pass_len); // write over memory
   free(username); username = NULL;
   memset(password, 0, user_pass_len); // write over memory
   free(password); password = NULL;
-
-  // connect to broker
-  rc = mosquitto_connect( mosq, 
-                          BROKER, 
-                          PORT, 
-                          KEEPALIVE
-                        );
-  if (rc != MOSQ_ERR_SUCCESS)
-  {
-    LOG(LOG_ERR, "mosquitto_connect rc=%d, %s", rc, mosquitto_strerror(rc));
-    goto cleanup;
-  }
-
-  // run the main (threaded) network loop for the client 
-  //rc = mosquitto_loop_start(mosq);
-  //if (rc != MOSQ_ERR_SUCCESS)
-  //{
-  //  LOG(LOG_ERR, "mosquitto_loop rc=%d, %s", rc, mosquitto_strerror(rc));
-  //  goto cleanup;
-  //}
-
-  LOG(LOG_INFO, "waiting for connection...");
-  const struct timespec sleep_time = {1, 0};
-  while(!connection_status && !global_abort) 
-  {
-    nanosleep(&sleep_time, NULL);  // sleep for 1 second at a time
-  };
-
-  rc = mosquitto_publish( mosq, 
-                          NULL, 
-                          "mqttify/client-connection-status", 
-                          sizeof(connection_status), 
-                          &connection_status, 
-                          0, 
-                          false
-                        );
-  if (rc != MOSQ_ERR_SUCCESS)
-  {
-    LOG(LOG_ERR, "mosquitto_publish connection status rc=%d, %s", 
-        rc, mosquitto_strerror(rc));
-    goto cleanup;
-  }
-
+  
+  // deamonize only after we were able to get connected
   if (daemonize_flag) 
   {
     rc = daemonize_proc();
-
     if (rc != 0)
     {
-      LOG(LOG_ERR, "daemonize_proc rc=%d, %s", rc, mosquitto_strerror(rc));
+      LOG(LOG_ERR, "daemonize_proc rc=%d", rc);
       goto cleanup;
     }
   }
 
-  int bytes_read;
+  int bytes_read = 0;
   int rx_msg_len = 256;
   char* rx_msg = malloc(rx_msg_len*sizeof(char));
   if (!rx_msg)
@@ -331,59 +266,81 @@ int main(int argc, char** argv)
     goto cleanup;
   }
 
+  MQTTClient_message pubmsg = MQTTClient_message_initializer;    
 
   while(!global_abort) 
   {
-    memset(&rx_msg[0], 0, strlen(rx_msg));
-    
+
+    if(try_reconnect)
+    {
+      rc = MQTTClient_connect(client, &conn_opts);
+      if ( MQTTCLIENT_SUCCESS != rc)
+      {
+        LOG(LOG_WARN, "reconnection attempt, MQTTClient_connect() returned %d", rc);
+        const struct timespec sleeptime = {5, 0};
+        nanosleep(&sleeptime, NULL);
+        continue;
+      } 
+      else 
+      {
+        LOG(LOG_INFO, "reconnection success");
+        try_reconnect = false;
+      }
+    }
+
+    memset(&rx_msg[0], 0, bytes_read);
     bytes_read = serial_read(rx_msg, rx_msg_len);
     if (bytes_read < 0)
     {
-      LOG(LOG_ERR, "serial_read rc=%d", bytes_read);
+      LOG(LOG_ERR, "serial_read returned %d", bytes_read);
       global_abort = true;
     }
     else if (bytes_read != 0)
     {
+      LOG(LOG_INFO, "publishing message %s to mqttify/device-rx", rx_msg);
       // publish the message
-      rc = mosquitto_publish( mosq, 
-                              NULL, 
-                              "mqttify/device-rx", 
-                              strlen(rx_msg), 
-                              (void*) &rx_msg[0], 
-                              0, 
-                              false
-                            );
-      if (rc != MOSQ_ERR_SUCCESS)
+      pubmsg.payload = rx_msg;
+      pubmsg.payloadlen = bytes_read;
+      pubmsg.qos = QOS;
+      pubmsg.retained = 0;
+      rc = MQTTClient_publishMessage(client, "mqttify/device-rx", &pubmsg, NULL);
+      if (MQTTCLIENT_SUCCESS != rc)
       {
-        LOG(LOG_ERR, "mosquitto_publish device-rx rc=%d, %s", \
-            rc, mosquitto_strerror(rc));
-        global_abort = true;
+        LOG(LOG_WARN, "publish failed rc=%d", rc);
       }
-    }
 
-    rc = mosquitto_loop(mosq, 100, 10);
-    if (rc != MOSQ_ERR_SUCCESS)
-    {
-      LOG(LOG_ERR, "mosquitto_loop rc=%d, %s", rc, mosquitto_strerror(rc));
-      global_abort = true;
     }
 
   } // while(!global_abort)
   
 cleanup:
+  serial_cleanup();
   cleanup_and_exit();
   free(rx_msg);
-  mosquitto_disconnect(mosq);
-  mosquitto_loop_stop(mosq, true);
 
   return rc;
 }
 
+int message_cb(void *context, char* topicName, int topicLen, MQTTClient_message *message)
+{
+  LOG(LOG_INFO, "message on %s : %s", topicName, (char*) message->payload);
+
+  MQTTClient_freeMessage(&message);
+  MQTTClient_free(&topicName);
+  return 1;
+}
+
+void disconnect_cb(void *context, char* cause)
+{
+  LOG(LOG_WARN, "disconnect due to %s, trying to reconnect", cause);
+  try_reconnect = true;
+}
+
 void cleanup_and_exit()
 {
-  mosquitto_disconnect(mosq);
-  mosquitto_destroy(mosq);
-  mosquitto_lib_cleanup();
+  MQTTClient_unsubscribe(client, "mqttify/device-tx");
+  MQTTClient_disconnect(client, 100); // disconnects with a timeout of 100 
+  MQTTClient_destroy(&client);
 }
 
 void print_usage()
@@ -396,34 +353,6 @@ void print_usage()
   printf("example:\n");
   printf("  mqttify --file /dev/<example> -d\n");
 }
-
-void on_connect(struct mosquitto *mosq, void* obj, int rc)
-{
-  int ret;
-  
-  LOG(LOG_INFO, "on_connect, CONNACK: %d, %s", rc, mosquitto_connack_string(rc));
-  if (rc != 0)
-  {
-    LOG(LOG_ERR, "on_connect rc=%d", rc);
-    global_abort = true;
-  }
-
-  ret = mosquitto_subscribe(mosq, NULL, "mqttify/device-tx", 1);
-  if (ret != 0)
-  {
-    LOG(LOG_ERR, "mosquitto_subscribe rc=%d, %s", rc, mosquitto_strerror(rc));
-    global_abort = true;
-  }
-  connection_status = true;
-
-} // on_connect
-
-
-void on_message(struct mosquitto *mosq, void* obj, const struct mosquitto_message *msg)
-{
-  // write the message payload to tx
-  serial_write((char*) msg->payload, msg->payloadlen);
-} // on_message
 
 static int register_signal_handlers() 
 {

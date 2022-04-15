@@ -10,7 +10,7 @@ ifeq ($(CFLAGS),)
 endif 
 
 ifeq ($(LDFLAGS),)
-	LDFLAGS = -lmosquitto 
+	LDFLAGS = -lpaho-mqtt3cs
 endif 
 
 TARGET_BUILD?=0
