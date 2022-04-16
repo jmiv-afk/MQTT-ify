@@ -90,6 +90,7 @@ int message_cb(void *context, char* topicName, int topicLen, MQTTClient_message 
  *    GLOBALS
  * ===========================================================================*/
 MQTTClient client;
+static char* serial_device = NULL;
 static bool global_abort = false;
 static bool try_reconnect = false;
 
@@ -101,7 +102,6 @@ static bool try_reconnect = false;
 int main(int argc, char** argv) 
 {
   bool daemonize_flag = false;
-  char* serial_device = NULL;
   int maxlen = 16;
   int rc = -1;
 
@@ -239,6 +239,13 @@ int main(int argc, char** argv)
   }
 
   try_reconnect = false;
+
+  rc = MQTTClient_subscribe(client, "mqttify/device-tx", QOS);
+  if (MQTTCLIENT_SUCCESS != rc)
+  {
+    LOG(LOG_ERR, "MQTTClient_subscribe() returned %d", rc);
+    goto cleanup;
+  }
 
   // clear out username and password in memory
   memset(username, 0, user_pass_len); // write over memory

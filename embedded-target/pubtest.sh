@@ -4,6 +4,6 @@ mosquitto_pub \
   -p '8883' \
   -u "$(head -1 passwd.txt)" \
   -P "$(tail -1 passwd.txt)" \
-  -t 'mqttify/test' \
+  -t 'mqttify/device-tx' \
   -m 'Hello from TEST' \
-  --cafile /home/jmiv/aesd/MQTT-ify/cert.pem
+  #--cafile /home/jmiv/aesd/MQTT-ify/cert.pem

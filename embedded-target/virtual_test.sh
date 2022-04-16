@@ -10,7 +10,7 @@ socat_pid=$!
 
 # start the mqttify program
 #./mqttify -f $(realpath $p1) &
-./mqttify -f $(realpath $p1) &
+./mqttify -f $(realpath $p1) -d
 mqttify_pid=$!
 
 #mosquitto -v &
@@ -24,7 +24,7 @@ echo "testing testing 1..2..3..." > $p2
 
 #read -n1 -s -r -p $'Press space to continue...\n' key
 
-#kill -s SIGTERM -p $socat_pid
-#kill -s SIGTERM -p $mqttify_pid
+kill -s SIGTERM -p $socat_pid
+kill -s SIGTERM -p $mqttify_pid
 #kill -s SIGTERM -p $mosquitto_pid
 
