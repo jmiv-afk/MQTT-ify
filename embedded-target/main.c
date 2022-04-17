@@ -331,7 +331,8 @@ cleanup:
 int message_cb(void *context, char* topicName, int topicLen, MQTTClient_message *message)
 {
   LOG(LOG_INFO, "message on %s : %s", topicName, (char*) message->payload);
-
+  // write to tx
+  serial_write((char*) msg->payload, msg->payloadlen);
   MQTTClient_freeMessage(&message);
   MQTTClient_free(&topicName);
   return 1;

@@ -19,7 +19,12 @@ class myApplication:
         self.client.connect("ec36fe04c68947d399f3cbbc782e89ff.s2.eu.hivemq.cloud", 
                               8883, 60)
         # TODO: get these from a file instead?
-        self.client.username_pw_set("<username>", "<password>")
+        with open("../passwd.txt") as file:
+            self.client.username_pw_set(
+                    file.readline().rstrip(' \n\r\t'),
+                    file.readline().rstrip(' \n\r\t')
+                    )
+
         # start threaded mainloop
         self.client.loop_start()
 
@@ -84,9 +89,12 @@ class SubscribePanel():
 
 
     def topic_reset(self):
+        topic=self.topic_entry.get()
+        self.client.unsubscribe(topic)
+        print("Unsubscribing from topic %s", topic)
+        self.clear_message_text()
         self.topic_entry.delete(0,END)
         self.topic_entry.unbind("<Key>")
-        print("Topic reset")
 
     def set_message_text(self, text):
         if self.message_text_nlines > 10:
@@ -95,6 +103,9 @@ class SubscribePanel():
             self.message_text_nlines+=1
 
         self.message_text.insert("1.0", text.rstrip(' \t\n\r')+'\n')
+
+    def clear_message_text(self):
+        self.message_text.delete("1.0", "end")
 
 
 class PublishPanel():

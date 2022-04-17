@@ -14,7 +14,11 @@
 
 // by default logs should go to syslog, but can be optionally redirected 
 // to printf for debug purposes by setting macro below to 1
+#ifdef TARGET_BUILD
+#define REDIRECT_LOG_TO_PRINTF (0)
+#else
 #define REDIRECT_LOG_TO_PRINTF (1)
+#endif
 
 #if REDIRECT_LOG_TO_PRINTF
   #define LOG(LOG_LEVEL, msg, ...) printf(msg "\n", ##__VA_ARGS__)
