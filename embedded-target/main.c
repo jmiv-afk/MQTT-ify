@@ -283,7 +283,7 @@ int main(int argc, char** argv)
       rc = MQTTClient_connect(client, &conn_opts);
       if ( MQTTCLIENT_SUCCESS != rc)
       {
-        LOG(LOG_WARN, "reconnection attempt, MQTTClient_connect() returned %d", rc);
+        LOG(LOG_WARNING, "reconnection attempt, MQTTClient_connect() returned %d", rc);
         const struct timespec sleeptime = {5, 0};
         nanosleep(&sleeptime, NULL);
         continue;
@@ -313,7 +313,7 @@ int main(int argc, char** argv)
       rc = MQTTClient_publishMessage(client, "mqttify/device-rx", &pubmsg, NULL);
       if (MQTTCLIENT_SUCCESS != rc)
       {
-        LOG(LOG_WARN, "publish failed rc=%d", rc);
+        LOG(LOG_WARNING, "publish failed rc=%d", rc);
       }
 
     }
@@ -340,7 +340,7 @@ int message_cb(void *context, char* topicName, int topicLen, MQTTClient_message 
 
 void disconnect_cb(void *context, char* cause)
 {
-  LOG(LOG_WARN, "disconnect due to %s, trying to reconnect", cause);
+  LOG(LOG_WARNING, "disconnect due to %s, trying to reconnect", cause);
   try_reconnect = true;
 }
 
