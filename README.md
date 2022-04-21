@@ -20,7 +20,7 @@ example:
 ```
 
 The application for the embedded target contains a Makefile which will build the executable. Presence or absence of the TARGET_BUILD flag will change the location that the program expects a `passwd.txt` file as follows:
-- TARGET_BUILD is unset, passwd.txt should be in the same folder that you are launching the executable from.
+- TARGET_BUILD is unset, passwd.txt is expected in the same directory that you are launching the executable from.
 - TARGET_BUILD is set, passwd.txt is expected at `etc/mqttify/passwd.txt`. 
 
 The passwd.txt file should contain the following contents:
@@ -28,6 +28,8 @@ The passwd.txt file should contain the following contents:
 <username>
 <password>
 ```
+
+The embedded target application built and used in this [custom Linux distribution](https://github.com/cu-ecen-aeld/final-project-jmichael16) which is built using Yocto for the Raspberry Pi 4. Further details for the overall project are included in that repository. 
 
 #### Desktop application
 I have provided a pipfile which outlines the dependencies. If you use `pipenv`, then you can simply navigate to the location you have cloned this git repository and:
