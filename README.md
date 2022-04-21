@@ -38,4 +38,4 @@ pipenv shell
 ./mqttify-gui-app.py
 ```
 
-If you don't use `pipenv`, you can install the dependencies systemwide with `pip3 install paho-mqtt`. Then run with `./mqttify-gui-app.py`. 
+If you don't use `pipenv`, you can install the dependencies system-wide with pip: `pip3 install paho-mqtt`. Then run with `./mqttify-gui-app.py`. 
