@@ -29,7 +29,7 @@ The passwd.txt file should contain the following contents:
 <password>
 ```
 
-The embedded target application built and used in this [custom Linux distribution](https://github.com/cu-ecen-aeld/final-project-jmichael16) which is built using Yocto for the Raspberry Pi 4. Further details for the overall project are included in that repository. 
+The embedded target application is included as a part of this [custom Linux distribution](https://github.com/cu-ecen-aeld/final-project-jmichael16) which is built with Yocto for the Raspberry Pi 4B. Further details for the overall project are included in that repository. 
 
 #### Desktop application
 I have provided a pipfile which outlines the dependencies. If you use `pipenv`, then you can simply navigate to the location you have cloned this git repository and:
