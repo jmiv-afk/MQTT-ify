@@ -4,13 +4,14 @@
 
 See the overall project [Wiki](https://github.com/cu-ecen-aeld/final-project-jmichael16/wiki/Project-Overview) for project details and [schedule](https://github.com/cu-ecen-aeld/final-project-jmichael16/wiki/Project-Overview). 
 
+### Brief
+[Custom Yocto image](https://github.com/cu-ecen-aeld/final-project-jmichael16/) on Raspberry Pi acts as an Edge device, communicating with legacy hardware over UART.  Tx/Rx communication is transmitted via MQTT pub/sub protocol to a cloud hosted broker. A seperate client, on a different network, running the Python GUI can transmit and receive messages from the legacy hardware. 
+
 ### Repository Contents
 This repository contains two applications: 
 - [Desktop GUI application](desktop-gui) written in Python3 using [Tkinter](https://docs.python.org/3/library/tkinter.html)
 - [Embedded target](embedded-target) application written in C using [Paho](https://www.eclipse.org/paho/)
 
-### Brief
-Custom Yocto image on Raspberry Pi acts as an Edge device, communicating with legacy hardware over UART.  Tx/Rx communication is transmitted via MQTT pub/sub protocol to a cloud hosted broker. A seperate client, on a different network, running the Python GUI can transmit and receive messages from the legacy hardware. 
 
 #### Embedded target application
 Example usage of the mqttify program:
